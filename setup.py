@@ -11,4 +11,11 @@ setup(
         'archinfo',
         'pyvex',
     ],
+    extras_require={
+        'dev': [
+            'mypy',
+            'pytest',
+            'ruff',
+        ],
+    },
 )
