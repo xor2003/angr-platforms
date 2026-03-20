@@ -28,3 +28,14 @@ Through these mechanisms, you can write new architectural descriptions, laoders 
 
 A set of tutorials, providing a walkthrough of these components, how they interact, and how to write them, can be found here: https://github.com/angr/angr-platforms/tree/master/tutorial
 
+## x86-16 Quick Start
+
+This repo includes an in-tree real-mode DOS sample corpus under `x16_samples/`.
+
+- Build or rebuild the sample matrix with `./scripts/build_x16_samples.sh`
+- Run the focused x86-16 regression suite with:
+  - `../venv/bin/python -m pytest -q tests/test_x86_16_smoketest.py tests/test_x86_16_cod_samples.py tests/test_x86_16_dos_mz_loader.py tests/test_x86_16_sample_matrix.py`
+- Run just the real-binary corpus coverage with:
+  - `../venv/bin/python -m pytest -q tests/test_x86_16_sample_matrix.py`
+
+The sample rebuild uses the DOS toolchain from `/home/xor/games/f15se2-re` by default. If your toolchain checkout lives somewhere else, set `X16_TOOLCHAIN_ROOT=/path/to/f15se2-re`.
