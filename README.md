@@ -32,6 +32,13 @@ A set of tutorials, providing a walkthrough of these components, how they intera
 
 This repo includes an in-tree real-mode DOS sample corpus under `x16_samples/`.
 
+- Decompile a DOS executable directly from the repo root with:
+  - `./decompile.py your_binary.exe`
+- Decompile a `.COM` sample the same way:
+  - `./decompile.py your_binary.com`
+- For raw blobs, use:
+  - `./decompile.py --blob your_binary.bin`
+
 - Build or rebuild the sample matrix with `./scripts/build_x16_samples.sh`
 - Run the focused x86-16 regression suite with:
   - `../venv/bin/python -m pytest -q tests/test_x86_16_smoketest.py tests/test_x86_16_cod_samples.py tests/test_x86_16_dos_mz_loader.py tests/test_x86_16_sample_matrix.py`
