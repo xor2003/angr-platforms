@@ -38,6 +38,9 @@ This repo includes an in-tree real-mode DOS sample corpus under `x16_samples/`.
   - `./decompile.py your_binary.com`
 - For raw blobs, use:
   - `./decompile.py --blob your_binary.bin`
+- If recovery is slow, pass a larger timeout or a concrete function start:
+  - `./decompile.py your_binary.exe --timeout 60`
+  - `./decompile.py your_binary.exe --addr 0x1146`
 
 - Build or rebuild the sample matrix with `./scripts/build_x16_samples.sh`
 - Run the focused x86-16 regression suite with:
