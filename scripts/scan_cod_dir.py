@@ -158,7 +158,7 @@ def main() -> int:
 
     _set_memory_limit(args.max_memory_mb)
 
-    cod_files = sorted(args.cod_dir.glob("*.COD"))
+    cod_files = sorted(args.cod_dir.rglob("*.COD"))
     results: list[FunctionScanResult] = []
     for cod_file in cod_files:
         for proc_name, proc_kind, code in _extract_functions(cod_file):
