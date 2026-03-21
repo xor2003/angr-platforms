@@ -149,6 +149,12 @@ def main() -> int:
     parser.add_argument("--max-memory-mb", type=int, default=1024, help="Address-space cap for this process")
     parser.add_argument("--limit", type=int, default=0, help="Only scan the first N functions (0 = all)")
     parser.add_argument(
+        "--stop-after-failures",
+        type=int,
+        default=0,
+        help="Stop scanning after collecting this many failures (0 = scan all).",
+    )
+    parser.add_argument(
         "--mode",
         choices=("lift", "decompile-reloc-free"),
         default="lift",
@@ -160,12 +166,21 @@ def main() -> int:
 
     cod_files = sorted(args.cod_dir.rglob("*.COD"))
     results: list[FunctionScanResult] = []
+    failures_seen = 0
     for cod_file in cod_files:
         for proc_name, proc_kind, code in _extract_functions(cod_file):
-            results.append(_scan_function(cod_file, proc_name, proc_kind, code, args.timeout_sec, args.mode))
+            result = _scan_function(cod_file, proc_name, proc_kind, code, args.timeout_sec, args.mode)
+            results.append(result)
+            is_failure = (not result.lift_ok) or (args.mode == "decompile-reloc-free" and result.decompile_ok is False)
+            if is_failure:
+                failures_seen += 1
             if args.limit and len(results) >= args.limit:
                 break
+            if args.stop_after_failures and failures_seen >= args.stop_after_failures:
+                break
         if args.limit and len(results) >= args.limit:
+            break
+        if args.stop_after_failures and failures_seen >= args.stop_after_failures:
             break
 
     failed = [
