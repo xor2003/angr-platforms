@@ -33,9 +33,15 @@ def _default_jobs() -> int:
     return max(1, cpu_count - 1)
 
 
-def _verify_one_file(task: tuple[Path, int | None, bool, frozenset[str]]) -> dict:
-    path, limit, execute_halt, revoked_hashes = task
-    return verify_moo_file(path, limit=limit, execute_halt=execute_halt, revoked_hashes=set(revoked_hashes))
+def _verify_one_file(task: tuple[Path, int | None, bool, frozenset[str], int | None]) -> dict:
+    path, limit, execute_halt, revoked_hashes, progress_every = task
+    return verify_moo_file(
+        path,
+        limit=limit,
+        execute_halt=execute_halt,
+        revoked_hashes=set(revoked_hashes),
+        progress_every=progress_every,
+    )
 
 
 def _exclude_compare_covered(files: list[Path]) -> tuple[list[Path], list[Path]]:
@@ -192,6 +198,12 @@ def main() -> int:
         action="store_true",
         help="Print per-opcode completion progress as workers finish.",
     )
+    parser.add_argument(
+        "--progress-every",
+        type=int,
+        default=None,
+        help="When set, also print intra-file case progress every N cases.",
+    )
     parser.add_argument("--json-output", type=Path, default=None, help="Optional JSON summary output path.")
     args = parser.parse_args()
     if args.jobs < 1:
@@ -226,14 +238,21 @@ def main() -> int:
             return 0
         raise SystemExit("No matching .MOO files found.")
 
-    tasks = [(path, args.limit, True, frozenset(revoked)) for path in files]
+    progress_every = args.progress_every if args.progress_every and args.progress_every > 0 else None
+    tasks = [(path, args.limit, True, frozenset(revoked), progress_every) for path in files]
     worker_count = min(args.jobs, len(tasks))
 
     summaries = []
     start_time = time.monotonic()
     if worker_count == 1:
         for index, path in enumerate(files, start=1):
-            summary = verify_moo_file(path, limit=args.limit, execute_halt=True, revoked_hashes=revoked)
+            summary = verify_moo_file(
+                path,
+                limit=args.limit,
+                execute_halt=True,
+                revoked_hashes=revoked,
+                progress_every=progress_every,
+            )
             summaries.append(summary)
             _update_passed_cache(args.passed_cache, [summary])
             if args.progress:
