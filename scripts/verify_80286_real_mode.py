@@ -6,7 +6,8 @@ import argparse
 import hashlib
 import os
 import sys
-from concurrent.futures import ProcessPoolExecutor
+import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import date
 from pathlib import Path
 
@@ -109,6 +110,27 @@ def _update_passed_cache(path: Path, summaries: list[dict]) -> set[str]:
     return passed
 
 
+def _print_summary(summary: dict) -> None:
+    print(
+        f"{summary['opcode']:>6}  passed={summary['passed']:>4}  failed={summary['failed']:>4}  "
+        f"skipped={summary['skipped']:>4}  total={summary['total']:>4}  {summary['sample_name']}",
+        flush=True,
+    )
+    for result in summary["results"]:
+        if result["passed"] or result["skipped"]:
+            continue
+        if result["error"]:
+            print(f"         case {result['idx']:>4}: error: {result['error']}", flush=True)
+        elif result["mismatches"]:
+            first = result["mismatches"][0]
+            where = f" @ {first['address']:#x}" if first["address"] is not None else ""
+            print(
+                f"         case {result['idx']:>4}: {first['kind']} {first['name']}{where}: "
+                f"expected {first['expected']:#x}, got {first['actual']:#x}",
+                flush=True,
+            )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Verify x86-16 real-mode execution against 80286 hardware dumps.")
     parser.add_argument(
@@ -165,6 +187,11 @@ def main() -> int:
         action="store_true",
         help="Clear the persistent passed-cache before running verification.",
     )
+    parser.add_argument(
+        "--progress",
+        action="store_true",
+        help="Print per-opcode completion progress as workers finish.",
+    )
     parser.add_argument("--json-output", type=Path, default=None, help="Optional JSON summary output path.")
     args = parser.parse_args()
     if args.jobs < 1:
@@ -203,32 +230,32 @@ def main() -> int:
     worker_count = min(args.jobs, len(tasks))
 
     summaries = []
+    start_time = time.monotonic()
     if worker_count == 1:
-        summaries = [
-            verify_moo_file(path, limit=args.limit, execute_halt=True, revoked_hashes=revoked)
-            for path in files
-        ]
+        for index, path in enumerate(files, start=1):
+            summary = verify_moo_file(path, limit=args.limit, execute_halt=True, revoked_hashes=revoked)
+            summaries.append(summary)
+            _update_passed_cache(args.passed_cache, [summary])
+            if args.progress:
+                elapsed = time.monotonic() - start_time
+                print(f"[{index}/{len(files)}] completed in {elapsed:.1f}s", flush=True)
+                _print_summary(summary)
     else:
         with ProcessPoolExecutor(max_workers=worker_count) as executor:
-            summaries = list(executor.map(_verify_one_file, tasks))
+            future_map = {executor.submit(_verify_one_file, task): task[0] for task in tasks}
+            for index, future in enumerate(as_completed(future_map), start=1):
+                summary = future.result()
+                summaries.append(summary)
+                _update_passed_cache(args.passed_cache, [summary])
+                if args.progress:
+                    elapsed = time.monotonic() - start_time
+                    print(f"[{index}/{len(files)}] completed in {elapsed:.1f}s", flush=True)
+                    _print_summary(summary)
 
-    for summary in summaries:
-        print(
-            f"{summary['opcode']:>6}  passed={summary['passed']:>4}  failed={summary['failed']:>4}  "
-            f"skipped={summary['skipped']:>4}  total={summary['total']:>4}  {summary['sample_name']}"
-        )
-        for result in summary["results"]:
-            if result["passed"] or result["skipped"]:
-                continue
-            if result["error"]:
-                print(f"         case {result['idx']:>4}: error: {result['error']}")
-            elif result["mismatches"]:
-                first = result["mismatches"][0]
-                where = f" @ {first['address']:#x}" if first["address"] is not None else ""
-                print(
-                    f"         case {result['idx']:>4}: {first['kind']} {first['name']}{where}: "
-                    f"expected {first['expected']:#x}, got {first['actual']:#x}"
-                )
+    summaries.sort(key=lambda summary: summary["opcode"])
+    if not args.progress:
+        for summary in summaries:
+            _print_summary(summary)
 
     suite_summary = summarize_results(summaries)
     print(
