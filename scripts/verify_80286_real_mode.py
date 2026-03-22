@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import sys
 from concurrent.futures import ProcessPoolExecutor
+from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -44,6 +46,34 @@ def _exclude_compare_covered(files: list[Path]) -> tuple[list[Path], list[Path]]
     return kept, skipped
 
 
+def _sample_compare_covered(
+    files: list[Path], *, day_of_month: int
+) -> tuple[list[Path], list[Path], list[Path]]:
+    if not 1 <= day_of_month <= 31:
+        raise ValueError("day_of_month must be in 1..31")
+
+    kept: list[Path] = []
+    sampled: list[Path] = []
+    skipped: list[Path] = []
+    sample_bucket = day_of_month - 1
+
+    for path in files:
+        stem = path.name.removesuffix(".MOO.gz").removesuffix(".MOO")
+        if stem not in COMPARE_VERIFIED_MOO_OPCODES:
+            kept.append(path)
+            continue
+
+        digest = hashlib.sha1(stem.encode("ascii")).digest()
+        bucket = int.from_bytes(digest[:4], "big") % 31
+        if bucket == sample_bucket:
+            kept.append(path)
+            sampled.append(path)
+        else:
+            skipped.append(path)
+
+    return kept, sampled, skipped
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Verify x86-16 real-mode execution against 80286 hardware dumps.")
     parser.add_argument(
@@ -68,6 +98,17 @@ def main() -> int:
         help="Skip opcode files already covered by upstream-x86 compare semantics tests.",
     )
     parser.add_argument(
+        "--sample-compare-covered",
+        action="store_true",
+        help="Keep only a deterministic day-of-month sample of compare-covered opcode files.",
+    )
+    parser.add_argument(
+        "--sample-day",
+        type=int,
+        default=None,
+        help="Override the day-of-month used for compare-covered sampling (1-31).",
+    )
+    parser.add_argument(
         "--jobs",
         type=int,
         default=_default_jobs(),
@@ -77,12 +118,18 @@ def main() -> int:
     args = parser.parse_args()
     if args.jobs < 1:
         raise SystemExit("--jobs must be at least 1")
+    if args.skip_compare_covered and args.sample_compare_covered:
+        raise SystemExit("--skip-compare-covered and --sample-compare-covered are mutually exclusive")
 
     revoked = set() if args.ignore_revoked else load_revocation_hashes(args.revocation_list)
     files = discover_moo_files(args.suite, args.opcode)
     skipped_compare: list[Path] = []
+    sampled_compare: list[Path] = []
     if args.skip_compare_covered:
         files, skipped_compare = _exclude_compare_covered(files)
+    elif args.sample_compare_covered:
+        day_of_month = args.sample_day or date.today().day
+        files, sampled_compare, skipped_compare = _sample_compare_covered(files, day_of_month=day_of_month)
     if not files:
         raise SystemExit("No matching .MOO files found.")
 
@@ -123,6 +170,8 @@ def main() -> int:
         f"passed={suite_summary['passed_cases']}  failed={suite_summary['failed_cases']}  "
         f"skipped={suite_summary['skipped_cases']}"
     )
+    if sampled_compare:
+        print(f"Sampled compare-covered opcode files={len(sampled_compare)}")
     if skipped_compare:
         print(f"Skipped compare-covered opcode files={len(skipped_compare)}")
 
