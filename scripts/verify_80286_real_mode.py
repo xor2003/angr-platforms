@@ -19,6 +19,7 @@ from angr_platforms.X86_16.verification_80286 import (
     summary_to_json,
     verify_moo_file,
 )
+from angr_platforms.X86_16.coverage_manifest import COMPARE_VERIFIED_MOO_OPCODES
 
 
 def _default_jobs() -> int:
@@ -29,6 +30,18 @@ def _default_jobs() -> int:
 def _verify_one_file(task: tuple[Path, int | None, bool, frozenset[str]]) -> dict:
     path, limit, execute_halt, revoked_hashes = task
     return verify_moo_file(path, limit=limit, execute_halt=execute_halt, revoked_hashes=set(revoked_hashes))
+
+
+def _exclude_compare_covered(files: list[Path]) -> tuple[list[Path], list[Path]]:
+    kept: list[Path] = []
+    skipped: list[Path] = []
+    for path in files:
+        stem = path.name.removesuffix(".MOO.gz").removesuffix(".MOO")
+        if stem in COMPARE_VERIFIED_MOO_OPCODES:
+            skipped.append(path)
+        else:
+            kept.append(path)
+    return kept, skipped
 
 
 def main() -> int:
@@ -50,6 +63,11 @@ def main() -> int:
     )
     parser.add_argument("--ignore-revoked", action="store_true", help="Do not skip revoked case hashes.")
     parser.add_argument(
+        "--skip-compare-covered",
+        action="store_true",
+        help="Skip opcode files already covered by upstream-x86 compare semantics tests.",
+    )
+    parser.add_argument(
         "--jobs",
         type=int,
         default=_default_jobs(),
@@ -62,6 +80,9 @@ def main() -> int:
 
     revoked = set() if args.ignore_revoked else load_revocation_hashes(args.revocation_list)
     files = discover_moo_files(args.suite, args.opcode)
+    skipped_compare: list[Path] = []
+    if args.skip_compare_covered:
+        files, skipped_compare = _exclude_compare_covered(files)
     if not files:
         raise SystemExit("No matching .MOO files found.")
 
@@ -102,6 +123,8 @@ def main() -> int:
         f"passed={suite_summary['passed_cases']}  failed={suite_summary['failed_cases']}  "
         f"skipped={suite_summary['skipped_cases']}"
     )
+    if skipped_compare:
+        print(f"Skipped compare-covered opcode files={len(skipped_compare)}")
 
     if args.json_output is not None:
         args.json_output.write_text(summary_to_json(suite_summary) + "\n")
