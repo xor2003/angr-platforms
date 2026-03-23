@@ -277,9 +277,9 @@ def main() -> int:
     parser.add_argument("--window", type=_parse_int, default=0x200, help="Recovery window from start address.")
     parser.add_argument(
         "--api-style",
-        choices=("modern", "dos", "raw", "msc", "compiler"),
+        choices=("modern", "dos", "raw", "pseudo", "service", "msc", "compiler"),
         default="modern",
-        help="Render recovered DOS helpers in modern, DOS/compiler, or raw style.",
+        help="Render recovered DOS helpers in modern, DOS/compiler, pseudo-callee, or raw style.",
     )
     args = parser.parse_args()
 
