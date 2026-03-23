@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
+import platform
 import sys
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -17,6 +18,8 @@ from angr_platforms.X86_16.verification_80286 import (
     DEFAULT_REVOCATION_LIST,
     DEFAULT_SUITE_DIR,
     discover_moo_files,
+    load_moo_cases,
+    opcode_name_for_path,
     load_revocation_hashes,
     summarize_results,
     summary_to_json,
@@ -33,15 +36,93 @@ def _default_jobs() -> int:
     return max(1, cpu_count - 1)
 
 
-def _verify_one_file(task: tuple[Path, int | None, bool, frozenset[str], int | None]) -> dict:
-    path, limit, execute_halt, revoked_hashes, progress_every = task
+def _default_nice() -> int:
+    if platform.system() != "Linux":
+        return 0
+    return 10
+
+
+def _apply_nice(nice_value: int) -> None:
+    if nice_value <= 0:
+        return
+    if platform.system() != "Linux":
+        return
+    try:
+        os.nice(nice_value)
+    except OSError:
+        pass
+
+
+def _verify_one_file(task: tuple[Path, int | None, bool, frozenset[str], int | None, int, int | None]) -> dict:
+    path, limit, execute_halt, revoked_hashes, progress_every, case_start, case_stop = task
     return verify_moo_file(
         path,
         limit=limit,
         execute_halt=execute_halt,
         revoked_hashes=set(revoked_hashes),
         progress_every=progress_every,
+        case_start=case_start,
+        case_stop=case_stop,
     )
+
+
+def _merge_file_summaries(parts: list[dict]) -> dict:
+    first = parts[0]
+    ordered_parts = sorted(parts, key=lambda item: item["results"][0]["idx"] if item["results"] else -1)
+    merged_results: list[dict] = []
+    for part in ordered_parts:
+        merged_results.extend(part["results"])
+    return {
+        "opcode": first["opcode"],
+        "path": first["path"],
+        "cpu": first["cpu"],
+        "total": sum(part["total"] for part in parts),
+        "passed": sum(part["passed"] for part in parts),
+        "failed": sum(part["failed"] for part in parts),
+        "skipped": sum(part["skipped"] for part in parts),
+        "sample_name": first["sample_name"],
+        "results": merged_results,
+    }
+
+
+def _build_tasks(
+    files: list[Path],
+    *,
+    limit: int | None,
+    execute_halt: bool,
+    revoked: set[str],
+    progress_every: int | None,
+    jobs: int,
+) -> tuple[list[tuple[Path, int | None, bool, frozenset[str], int | None, int, int | None]], dict[tuple[str, int, int | None], str]]:
+    if not files:
+        return [], {}
+
+    if len(files) >= jobs:
+        tasks = [(path, limit, execute_halt, frozenset(revoked), progress_every, 0, None) for path in files]
+        task_keys = {(str(path), 0, None): opcode_name_for_path(path) for path in files}
+        return tasks, task_keys
+
+    task_keys: dict[tuple[str, int, int | None], str] = {}
+    tasks: list[tuple[Path, int | None, bool, frozenset[str], int | None, int, int | None]] = []
+    base_chunks = max(1, jobs // len(files))
+    extra_chunks = jobs % len(files)
+
+    for index, path in enumerate(files):
+        target_chunks = base_chunks + (1 if index < extra_chunks else 0)
+        _, cases = load_moo_cases(path)
+        total_cases = len(cases if limit is None else cases[:limit])
+        if total_cases == 0:
+            tasks.append((path, limit, execute_halt, frozenset(revoked), progress_every, 0, 0))
+            task_keys[(str(path), 0, 0)] = opcode_name_for_path(path)
+            continue
+        target_chunks = min(target_chunks, total_cases)
+        chunk_size = max(1, (total_cases + target_chunks - 1) // target_chunks)
+        for case_start in range(0, total_cases, chunk_size):
+            case_stop = min(total_cases, case_start + chunk_size)
+            tasks.append((path, None, execute_halt, frozenset(revoked), progress_every, case_start, case_stop))
+            task_keys[(str(path), case_start, case_stop)] = opcode_name_for_path(path)
+
+    return tasks, task_keys
 
 
 def _exclude_compare_covered(files: list[Path]) -> tuple[list[Path], list[Path]]:
@@ -178,6 +259,12 @@ def main() -> int:
         help="Worker processes to use across opcode files. Defaults to max(1, cpu_count - 1).",
     )
     parser.add_argument(
+        "--nice",
+        type=int,
+        default=_default_nice(),
+        help="Increase process nice level on Linux before running workers. Defaults to 10.",
+    )
+    parser.add_argument(
         "--passed-cache",
         type=Path,
         default=DEFAULT_PASSED_CACHE,
@@ -208,8 +295,12 @@ def main() -> int:
     args = parser.parse_args()
     if args.jobs < 1:
         raise SystemExit("--jobs must be at least 1")
+    if args.nice < 0:
+        raise SystemExit("--nice must be >= 0")
     if args.skip_compare_covered and args.sample_compare_covered:
         raise SystemExit("--skip-compare-covered and --sample-compare-covered are mutually exclusive")
+
+    _apply_nice(args.nice)
 
     revoked = set() if args.ignore_revoked else load_revocation_hashes(args.revocation_list)
     files = discover_moo_files(args.suite, args.opcode)
@@ -239,38 +330,42 @@ def main() -> int:
         raise SystemExit("No matching .MOO files found.")
 
     progress_every = args.progress_every if args.progress_every and args.progress_every > 0 else None
-    tasks = [(path, args.limit, True, frozenset(revoked), progress_every) for path in files]
+    tasks, task_keys = _build_tasks(
+        files,
+        limit=args.limit,
+        execute_halt=True,
+        revoked=revoked,
+        progress_every=progress_every,
+        jobs=args.jobs,
+    )
     worker_count = min(args.jobs, len(tasks))
 
-    summaries = []
+    summaries_by_opcode: dict[str, list[dict]] = {}
     start_time = time.monotonic()
     if worker_count == 1:
-        for index, path in enumerate(files, start=1):
-            summary = verify_moo_file(
-                path,
-                limit=args.limit,
-                execute_halt=True,
-                revoked_hashes=revoked,
-                progress_every=progress_every,
-            )
-            summaries.append(summary)
-            _update_passed_cache(args.passed_cache, [summary])
+        for index, task in enumerate(tasks, start=1):
+            summary = _verify_one_file(task)
+            opcode = task_keys[(str(task[0]), task[5], task[6])]
+            summaries_by_opcode.setdefault(opcode, []).append(summary)
             if args.progress:
                 elapsed = time.monotonic() - start_time
-                print(f"[{index}/{len(files)}] completed in {elapsed:.1f}s", flush=True)
+                print(f"[{index}/{len(tasks)}] completed in {elapsed:.1f}s", flush=True)
                 _print_summary(summary)
     else:
         with ProcessPoolExecutor(max_workers=worker_count) as executor:
-            future_map = {executor.submit(_verify_one_file, task): task[0] for task in tasks}
+            future_map = {executor.submit(_verify_one_file, task): task for task in tasks}
             for index, future in enumerate(as_completed(future_map), start=1):
                 summary = future.result()
-                summaries.append(summary)
-                _update_passed_cache(args.passed_cache, [summary])
+                task = future_map[future]
+                opcode = task_keys[(str(task[0]), task[5], task[6])]
+                summaries_by_opcode.setdefault(opcode, []).append(summary)
                 if args.progress:
                     elapsed = time.monotonic() - start_time
-                    print(f"[{index}/{len(files)}] completed in {elapsed:.1f}s", flush=True)
+                    print(f"[{index}/{len(tasks)}] completed in {elapsed:.1f}s", flush=True)
                     _print_summary(summary)
 
+    summaries = [_merge_file_summaries(parts) for _, parts in sorted(summaries_by_opcode.items())]
+    _update_passed_cache(args.passed_cache, summaries)
     summaries.sort(key=lambda summary: summary["opcode"])
     if not args.progress:
         for summary in summaries:
