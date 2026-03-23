@@ -19,6 +19,8 @@ import angr_platforms.X86_16  # noqa: F401
 
 from angr_platforms.X86_16.analysis_helpers import (
     collect_dos_int21_calls,
+    DOSInt21Call,
+    decode_com_dollar_string,
     extend_cfg_for_far_calls,
     infer_com_region,
     render_dos_int21_call,
@@ -95,6 +97,10 @@ def _trace_exec(project, *, start: int, max_steps: int) -> str:
     seen: dict[int, int] = {}
     lines = []
     pending_fallthrough: int | None = None
+    pending_helper_annotation: str | None = None
+    ah: int | None = None
+    ax: int | None = None
+    dx: int | None = None
 
     for step_idx in range(max_steps):
         if not simgr.active:
@@ -115,11 +121,72 @@ def _trace_exec(project, *, start: int, max_steps: int) -> str:
             lines.append(header)
             lines.append(asm)
             pending_fallthrough = addr + project.factory.block(addr, num_inst=1, opt_level=0).size
+
+            insn = next(project.arch.capstone.disasm(_insn_bytes(project, addr) or b"", addr, 1), None)
+            if insn is not None:
+                operands = getattr(insn, "operands", ())
+                if insn.mnemonic == "mov" and len(operands) == 2:
+                    dst, src = operands
+                    if dst.type == 1 and src.type == 2:
+                        reg_name = insn.reg_name(dst.reg).lower()
+                        imm = src.imm & 0xFFFF
+                        if reg_name == "ah":
+                            ah = imm & 0xFF
+                            ax = None if ax is None else ((ah << 8) | (ax & 0x00FF))
+                        elif reg_name == "ax":
+                            ax = imm
+                            ah = (ax >> 8) & 0xFF
+                        elif reg_name == "dx":
+                            dx = imm
+                    elif dst.type == 1:
+                        reg_name = insn.reg_name(dst.reg).lower()
+                        if reg_name == "ah":
+                            ah = None
+                            ax = None
+                        elif reg_name == "ax":
+                            ax = None
+                            ah = None
+                        elif reg_name == "dx":
+                            dx = None
+                elif (
+                    insn.mnemonic == "xor"
+                    and len(operands) == 2
+                    and operands[0].type == 1
+                    and operands[1].type == 1
+                ):
+                    dst_name = insn.reg_name(operands[0].reg).lower()
+                    src_name = insn.reg_name(operands[1].reg).lower()
+                    if dst_name == src_name:
+                        if dst_name == "ax":
+                            ax = 0
+                            ah = 0
+                        elif dst_name == "dx":
+                            dx = 0
+                        elif dst_name == "ah":
+                            ah = 0
+                            ax = None if ax is None else (ax & 0x00FF)
+                elif insn.mnemonic == "int" and insn.op_str.lower() == "0x21":
+                    binary_path = Path(project.filename) if project.filename is not None else None
+                    pending_helper_annotation = render_dos_int21_call(
+                        DOSInt21Call(
+                            insn_addr=insn.address,
+                            ah=ah,
+                            ax=ax,
+                            dx=dx,
+                            string_literal=decode_com_dollar_string(binary_path, dx),
+                        ),
+                        "modern",
+                    )
+                    dx = None
         else:
             simproc = project.hooked_by(addr)
             proc_name = simproc.__class__.__name__ if simproc is not None else "external"
-            lines.append(f"helper={proc_name}")
+            helper_line = f"helper={proc_name}"
+            if pending_helper_annotation is not None:
+                helper_line = f"{helper_line} ; {pending_helper_annotation}"
+            lines.append(helper_line)
             lines.append("<no binary bytes at this address>")
+            pending_helper_annotation = None
 
         if seen[addr] > 2:
             lines.append(f"stopped: loop detected at {addr:#x}")
