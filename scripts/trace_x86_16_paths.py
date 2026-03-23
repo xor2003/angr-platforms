@@ -17,7 +17,12 @@ if str(ROOT) not in sys.path:
 
 import angr_platforms.X86_16  # noqa: F401
 
-from angr_platforms.X86_16.analysis_helpers import extend_cfg_for_far_calls, infer_com_region
+from angr_platforms.X86_16.analysis_helpers import (
+    collect_dos_int21_calls,
+    extend_cfg_for_far_calls,
+    infer_com_region,
+    render_dos_int21_call,
+)
 from angr_platforms.X86_16.arch_86_16 import Arch86_16
 
 
@@ -72,6 +77,13 @@ def _format_block(project, addr: int) -> tuple[str, str]:
     next_text = hex(next_con.value) if next_con is not None else str(next_expr)
     header = f"jumpkind={block.vex.jumpkind} next={next_text}"
     return header, "\n".join(asm_lines) if asm_lines else "<no instructions>"
+
+
+def _dos_int21_annotations(function, binary: Path, api_style: str) -> dict[int, str]:
+    return {
+        call.insn_addr: render_dos_int21_call(call, api_style)
+        for call in collect_dos_int21_calls(function, binary)
+    }
 
 
 def _trace_exec(project, *, start: int, max_steps: int) -> str:
@@ -135,7 +147,7 @@ def _trace_exec(project, *, start: int, max_steps: int) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _trace_cfg(project, binary: Path, *, start: int, window: int, max_blocks: int) -> str:
+def _trace_cfg(project, binary: Path, *, start: int, window: int, max_blocks: int, api_style: str) -> str:
     if binary.suffix.lower() == ".com":
         regions = [infer_com_region(binary, base_addr=start, window=window, arch=project.arch)]
     else:
@@ -158,6 +170,8 @@ def _trace_cfg(project, binary: Path, *, start: int, window: int, max_blocks: in
             cfg = ext
             function = cfg.functions[start]
 
+    helper_annotations = _dos_int21_annotations(function, binary, api_style)
+
     lines = [f"function: {function.addr:#x} {function.name}"]
     for idx, block_addr in enumerate(sorted(function.block_addrs_set)):
         if idx >= max_blocks:
@@ -175,7 +189,11 @@ def _trace_cfg(project, binary: Path, *, start: int, window: int, max_blocks: in
         lines.append(f"== block {block_addr:#x} ==")
         lines.append(f"jumpkind={block.vex.jumpkind} succs={succ_text}")
         for ins in block.capstone.insns:
-            lines.append(f"{ins.address:#06x}: {ins.mnemonic} {ins.op_str}".rstrip())
+            line = f"{ins.address:#06x}: {ins.mnemonic} {ins.op_str}".rstrip()
+            annotation = helper_annotations.get(ins.address)
+            if annotation is not None:
+                line = f"{line} ; {annotation}"
+            lines.append(line)
     return "\n".join(lines) + "\n"
 
 
@@ -190,6 +208,12 @@ def main() -> int:
     parser.add_argument("--max-steps", type=int, default=16, help="Maximum concrete execution steps.")
     parser.add_argument("--max-blocks", type=int, default=16, help="Maximum CFG blocks to print.")
     parser.add_argument("--window", type=_parse_int, default=0x200, help="Recovery window from start address.")
+    parser.add_argument(
+        "--api-style",
+        choices=("modern", "dos", "raw", "msc", "compiler"),
+        default="modern",
+        help="Render recovered DOS helpers in modern, DOS/compiler, or raw style.",
+    )
     args = parser.parse_args()
 
     project = _build_project(
@@ -203,7 +227,7 @@ def main() -> int:
     if args.mode == "exec":
         output = _trace_exec(project, start=start, max_steps=args.max_steps)
     else:
-        output = _trace_cfg(project, args.binary, start=start, window=args.window, max_blocks=args.max_blocks)
+        output = _trace_cfg(project, args.binary, start=start, window=args.window, max_blocks=args.max_blocks, api_style=args.api_style)
 
     print(f"binary: {args.binary}")
     print(f"arch: {project.arch.name}")
