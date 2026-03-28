@@ -14,7 +14,31 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from angr_platforms.X86_16.corpus_scan import extract_cod_functions, scan_function, set_memory_limit, summarize_results
+from angr_platforms.X86_16.corpus_scan import (
+    FunctionScanResult,
+    ScanTimeout,
+    classify_failure,
+    extract_cod_functions,
+    scan_function,
+    set_memory_limit,
+    summarize_results,
+)
+
+
+def _timeout_result(cod_file: Path, proc_name: str, proc_kind: str, code: bytes, reason: str) -> FunctionScanResult:
+    result = FunctionScanResult(
+        cod_file=cod_file.name,
+        proc_name=proc_name,
+        proc_kind=proc_kind,
+        byte_len=len(code),
+        has_near_call_reloc=b"\xe8\x00\x00" in code,
+        has_far_call_reloc=b"\x9a\x00\x00\x00\x00" in code,
+        failure_class="timeout",
+        reason=reason,
+        fallback_kind="block_lift",
+    )
+    result.stage_reached = "decompile"
+    return result
 
 
 def main() -> int:
@@ -45,7 +69,12 @@ def main() -> int:
 
     for cod_file in cod_files:
         for proc_name, proc_kind, code in extract_cod_functions(cod_file):
-            result = scan_function(cod_file, proc_name, proc_kind, code, args.timeout_sec, args.mode)
+            try:
+                result = scan_function(cod_file, proc_name, proc_kind, code, args.timeout_sec, args.mode)
+            except ScanTimeout as exc:
+                failure_class, reason = classify_failure("decompile", exc)
+                result = _timeout_result(cod_file, proc_name, proc_kind, code, reason)
+                result.failure_class = failure_class
             results.append(result)
             if not result.ok:
                 failures_seen += 1
