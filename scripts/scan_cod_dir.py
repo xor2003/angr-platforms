@@ -8,7 +8,13 @@ import logging
 import sys
 from pathlib import Path
 
-logging.getLogger("angr.state_plugins.unicorn_engine").setLevel(logging.CRITICAL)
+for _logger_name in (
+    "angr.state_plugins.unicorn_engine",
+    "angr.analyses.analysis",
+    "angr.analyses.decompiler.clinic",
+    "angr.analyses.decompiler.callsite_maker",
+):
+    logging.getLogger(_logger_name).setLevel(logging.CRITICAL)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
