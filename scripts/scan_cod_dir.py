@@ -52,6 +52,12 @@ def main() -> int:
     parser.add_argument("cod_dir", type=Path, help="Directory containing .COD files")
     parser.add_argument("--timeout-sec", type=int, default=5, help="Per-function timeout in seconds")
     parser.add_argument("--max-memory-mb", type=int, default=1024, help="Address-space cap for this process")
+    parser.add_argument(
+        "--max-decompile-bytes",
+        type=int,
+        default=384,
+        help="In scan-safe mode, skip full decompilation for larger functions and stop at cfg/cleanup (0 = disable).",
+    )
     parser.add_argument("--limit", type=int, default=0, help="Only scan the first N functions (0 = all)")
     parser.add_argument(
         "--stop-after-failures",
@@ -76,7 +82,15 @@ def main() -> int:
     for cod_file in cod_files:
         for proc_name, proc_kind, code in extract_cod_functions(cod_file):
             try:
-                result = scan_function(cod_file, proc_name, proc_kind, code, args.timeout_sec, args.mode)
+                result = scan_function(
+                    cod_file,
+                    proc_name,
+                    proc_kind,
+                    code,
+                    args.timeout_sec,
+                    args.mode,
+                    max_decompile_bytes=args.max_decompile_bytes,
+                )
             except ScanTimeout as exc:
                 failure_class, reason = classify_failure("decompile", exc)
                 result = _timeout_result(cod_file, proc_name, proc_kind, code, reason)
