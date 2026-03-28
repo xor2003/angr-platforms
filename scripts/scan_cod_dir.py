@@ -6,6 +6,7 @@ import argparse
 import json
 import logging
 import sys
+import time
 from pathlib import Path
 
 for _logger_name in (
@@ -48,6 +49,12 @@ def _timeout_result(cod_file: Path, proc_name: str, proc_kind: str, code: bytes,
     return result
 
 
+def _collect_cod_files(cod_path: Path) -> list[Path]:
+    if cod_path.is_file():
+        return [cod_path] if cod_path.suffix.upper() == ".COD" else []
+    return sorted(cod_path.rglob("*.COD"))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Bounded staged corpus scan for .COD functions.")
     parser.add_argument("cod_dir", type=Path, help="Directory containing .COD files")
@@ -67,6 +74,12 @@ def main() -> int:
     )
     parser.add_argument("--limit", type=int, default=0, help="Only scan the first N functions (0 = all)")
     parser.add_argument(
+        "--progress-every",
+        type=int,
+        default=25,
+        help="Emit a progress line to stderr after every N scanned functions (0 = disable).",
+    )
+    parser.add_argument(
         "--stop-after-failures",
         type=int,
         default=0,
@@ -82,11 +95,35 @@ def main() -> int:
 
     set_memory_limit(args.max_memory_mb)
 
-    cod_files = sorted(args.cod_dir.rglob("*.COD"))
+    cod_files = _collect_cod_files(args.cod_dir)
     results = []
     failures_seen = 0
+    scanned_seen = 0
+    started_at = time.monotonic()
+
+    def _emit_progress(cod_file: Path | None, proc_name: str | None, proc_kind: str | None, result: FunctionScanResult | None = None) -> None:
+        if args.progress_every <= 0:
+            return
+        elapsed = time.monotonic() - started_at
+        status = "pending"
+        failure_class = "-"
+        fallback_kind = "-"
+        if result is not None:
+            status = "ok" if result.ok else "fail"
+            failure_class = result.failure_class or "-"
+            fallback_kind = result.fallback_kind or "-"
+        location = "-"
+        if cod_file is not None and proc_name is not None and proc_kind is not None:
+            location = f"{cod_file.name}:{proc_name}<{proc_kind}>"
+        print(
+            f"[scan-safe] scanned={scanned_seen} failures={failures_seen} elapsed={elapsed:0.1f}s "
+            f"status={status} location={location} failure={failure_class} fallback={fallback_kind}",
+            file=sys.stderr,
+            flush=True,
+        )
 
     for cod_file in cod_files:
+        print(f"[scan-safe] file-start {cod_file.name}", file=sys.stderr, flush=True)
         for proc_name, proc_kind, code in extract_cod_functions(cod_file):
             try:
                 result = scan_function(
@@ -104,8 +141,11 @@ def main() -> int:
                 result = _timeout_result(cod_file, proc_name, proc_kind, code, reason)
                 result.failure_class = failure_class
             results.append(result)
+            scanned_seen += 1
             if not result.ok:
                 failures_seen += 1
+            if args.progress_every and (scanned_seen % args.progress_every == 0 or not result.ok):
+                _emit_progress(cod_file, proc_name, proc_kind, result)
             if args.limit and len(results) >= args.limit:
                 break
             if args.stop_after_failures and failures_seen >= args.stop_after_failures:
@@ -116,6 +156,12 @@ def main() -> int:
             break
 
     summary = summarize_results(results, args.mode)
+    print(
+        f"[scan-safe] done scanned={summary['scanned']} ok={summary['ok']} failed={summary['failed']} "
+        f"elapsed={time.monotonic() - started_at:0.1f}s",
+        file=sys.stderr,
+        flush=True,
+    )
     print(json.dumps(summary, indent=2))
     return 1 if summary["failed"] else 0
 
