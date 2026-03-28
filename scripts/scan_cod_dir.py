@@ -54,6 +54,12 @@ def main() -> int:
     parser.add_argument("--timeout-sec", type=int, default=5, help="Per-function timeout in seconds")
     parser.add_argument("--max-memory-mb", type=int, default=1024, help="Address-space cap for this process")
     parser.add_argument(
+        "--max-cfg-bytes",
+        type=int,
+        default=2048,
+        help="In scan-safe mode, skip CFG/decompile for larger functions (0 = disable).",
+    )
+    parser.add_argument(
         "--max-decompile-bytes",
         type=int,
         default=384,
@@ -90,6 +96,7 @@ def main() -> int:
                     code,
                     args.timeout_sec,
                     args.mode,
+                    max_cfg_bytes=args.max_cfg_bytes,
                     max_decompile_bytes=args.max_decompile_bytes,
                 )
             except ScanTimeout as exc:
