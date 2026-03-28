@@ -63,7 +63,7 @@ def main() -> int:
     parser.add_argument(
         "--max-cfg-bytes",
         type=int,
-        default=2048,
+        default=192,
         help="In scan-safe mode, skip CFG/decompile for larger functions (0 = disable).",
     )
     parser.add_argument(
