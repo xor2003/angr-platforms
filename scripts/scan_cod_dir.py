@@ -150,6 +150,11 @@ def main() -> int:
                 break
             if args.stop_after_failures and failures_seen >= args.stop_after_failures:
                 break
+        print(
+            f"[scan-safe] file-end {cod_file.name} scanned={scanned_seen} failures={failures_seen}",
+            file=sys.stderr,
+            flush=True,
+        )
         if args.limit and len(results) >= args.limit:
             break
         if args.stop_after_failures and failures_seen >= args.stop_after_failures:
