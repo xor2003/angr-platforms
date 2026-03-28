@@ -13,6 +13,7 @@ for _logger_name in (
     "angr.analyses.analysis",
     "angr.analyses.decompiler.clinic",
     "angr.analyses.decompiler.callsite_maker",
+    "angr_platforms.X86_16.lift_86_16",
 ):
     logging.getLogger(_logger_name).setLevel(logging.CRITICAL)
 
