@@ -125,7 +125,7 @@ ROWS: tuple[MnemonicRow, ...] = (
     MnemonicRow("stos", ("stosb", "stosw"), "yes", "yes", "compare", "stosb, stosw; repeat-aware"),
     MnemonicRow("sub", (), "yes", "yes", "corpus", ALU_BIN),
     MnemonicRow("test", (), "yes", "yes", "compare", "reg/reg, reg/mem, reg/imm, mem/imm, accum/imm; 8+16-bit"),
-    MnemonicRow("wait", (), "no", "no", "none", "", "implicit"),
+    MnemonicRow("wait", (), "yes", "yes", "smoke", "implicit"),
     MnemonicRow("xchg", (), "yes", "yes", "compare", "accum/reg, reg/reg, mem/reg; 8+16-bit"),
     MnemonicRow("xlat", (), "yes", "yes", "compare+smoke", "implicit AL <- [BX+AL] via DS"),
     MnemonicRow("xor", (), "yes", "yes", "corpus", ALU_BIN),
