@@ -31,6 +31,7 @@ from angr_platforms.X86_16.corpus_scan import (
     set_memory_limit,
     summarize_results,
 )
+from angr_platforms.X86_16.milestone_report import build_x86_16_milestone_report
 
 
 def _timeout_result(cod_file: Path, proc_name: str, proc_kind: str, code: bytes, reason: str) -> FunctionScanResult:
@@ -90,6 +91,11 @@ def main() -> int:
         choices=("lift", "decompile-reloc-free", "scan-safe"),
         default="scan-safe",
         help="Either just lift, decompile reloc-free blobs, or run the full staged scan-safe lane.",
+    )
+    parser.add_argument(
+        "--milestone-report",
+        action="store_true",
+        help="Wrap the scan summary in the milestone report envelope with validation and readability context.",
     )
     args = parser.parse_args()
 
@@ -161,13 +167,21 @@ def main() -> int:
             break
 
     summary = summarize_results(results, args.mode)
+    output = (
+        build_x86_16_milestone_report(
+            summary,
+            corpus_slice=str(args.cod_dir),
+        )
+        if args.milestone_report
+        else summary
+    )
     print(
         f"[scan-safe] done scanned={summary['scanned']} ok={summary['ok']} failed={summary['failed']} "
         f"elapsed={time.monotonic() - started_at:0.1f}s",
         file=sys.stderr,
         flush=True,
     )
-    print(json.dumps(summary, indent=2))
+    print(json.dumps(output, indent=2))
     return 1 if summary["failed"] else 0
 
 
