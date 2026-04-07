@@ -31,7 +31,10 @@ from angr_platforms.X86_16.corpus_scan import (
     set_memory_limit,
     summarize_results,
 )
-from angr_platforms.X86_16.milestone_report import build_x86_16_milestone_report
+from angr_platforms.X86_16.milestone_report import (
+    build_x86_16_milestone_report,
+    render_x86_16_tail_validation_console_summary,
+)
 
 
 def _timeout_result(cod_file: Path, proc_name: str, proc_kind: str, code: bytes, reason: str) -> FunctionScanResult:
@@ -54,6 +57,13 @@ def _collect_cod_files(cod_path: Path) -> list[Path]:
     if cod_path.is_file():
         return [cod_path] if cod_path.suffix.upper() == ".COD" else []
     return sorted(cod_path.rglob("*.COD"))
+
+
+def _tail_validation_cache_path(cod_dir: Path, mode: str) -> Path:
+    cache_root = REPO_ROOT / ".cache" / "scan_cod_dir"
+    target = cod_dir.resolve()
+    suffix = target.name if target.name else "corpus"
+    return cache_root / f"{suffix}.{mode}.tail_validation_console.json"
 
 
 def main() -> int:
@@ -175,12 +185,23 @@ def main() -> int:
         if args.milestone_report
         else summary
     )
+    tail_surface = output.get("tail_validation_surface") if isinstance(output, dict) else None
+    if not isinstance(tail_surface, dict):
+        tail_surface = summary.get("tail_validation_surface", {})
+    rendered_tail = render_x86_16_tail_validation_console_summary(
+        tail_surface,
+        cache_path=_tail_validation_cache_path(args.cod_dir, args.mode),
+    )
     print(
         f"[scan-safe] done scanned={summary['scanned']} ok={summary['ok']} failed={summary['failed']} "
         f"elapsed={time.monotonic() - started_at:0.1f}s",
         file=sys.stderr,
         flush=True,
     )
+    for line in rendered_tail["lines"]:
+        print(f"[tail-validation] {line}", file=sys.stderr, flush=True)
+    if rendered_tail.get("cache_hit"):
+        print("[tail-validation] console summary cache hit", file=sys.stderr, flush=True)
     print(json.dumps(output, indent=2))
     return 1 if summary["failed"] else 0
 
