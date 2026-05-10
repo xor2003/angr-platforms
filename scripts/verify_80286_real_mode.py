@@ -13,6 +13,7 @@ from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from angr_platforms.X86_16.verification_80286 import (
     DEFAULT_REVOCATION_LIST,
